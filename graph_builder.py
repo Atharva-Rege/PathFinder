@@ -10,6 +10,10 @@ import torch_geometric.transforms as T
 # from sentence_transformers import SentenceTransformer
 from torch_geometric.data import HeteroData
 
+MODULE_DIR = Path(__file__).resolve().parent
+DEFAULT_DATA_DIR = MODULE_DIR / "required_data"
+DEFAULT_SAVE_DIR = MODULE_DIR / "save"
+
 
 def turn_job_category_to_list(st):
     if type(st) is not str:
@@ -124,22 +128,20 @@ def str_to_list(s_input):
     return []
 
 
-def load_data(path='D:/Personal/code/pyg/required_data/'):
-    # Ensure path ends with a slash
-    if not path.endswith('/'):
-        path = path + '/'
-    
-    candidate_skills = f'{path}candidate_skills.csv'
-    job_candidates = f'{path}job_candidates.csv'
-    jobs_skills = f'{path}jobs_skills.csv'
-    candidate = f'{path}candidates.csv'
-    job = f'{path}jobs.csv'
-    hierarchy = f'{path}hierarchy.csv'
-    skills = f'{path}hierarchy.csv'
-    candidate_pre = f'{path}candidate_preprocessing.csv'
-    job_pre = f'{path}job_preprocessing.csv'
-    cities = f'{path}cities.csv'
-    video_games = f'{path}video_games.csv'
+def load_data(path=DEFAULT_DATA_DIR):
+    data_dir = Path(path)
+
+    candidate_skills = data_dir / 'candidate_skills.csv'
+    job_candidates = data_dir / 'job_candidates.csv'
+    jobs_skills = data_dir / 'jobs_skills.csv'
+    candidate = data_dir / 'candidates.csv'
+    job = data_dir / 'jobs.csv'
+    hierarchy = data_dir / 'hierarchy.csv'
+    skills = data_dir / 'hierarchy.csv'
+    candidate_pre = data_dir / 'candidate_preprocessing.csv'
+    job_pre = data_dir / 'job_preprocessing.csv'
+    cities = data_dir / 'cities.csv'
+    video_games = data_dir / 'video_games.csv'
     # Some softwares are video games
     video_games = pd.read_csv(video_games)
     video_games = {"http://perso.com/" + x.replace(" ", "_") for x in video_games["itemLabel"]}
@@ -589,8 +591,8 @@ def load_features(unique_job_id, unique_user_id, candidate, reload=False):
     #     np.save('save/candidate_features.npy', candidate_features)
 
     # load features
-    job_features = np.load('save/job_features.npy')
-    candidate_features = np.load('save/candidate_features.npy')
+    job_features = np.load(DEFAULT_SAVE_DIR / 'job_features.npy')
+    candidate_features = np.load(DEFAULT_SAVE_DIR / 'candidate_features.npy')
 
     # if job_features.shape[0] != len(unique_job_id) or candidate_features.shape[0] != len(unique_user_id):
     #     print("We need to recompute features...")
@@ -606,7 +608,7 @@ def load_features(unique_job_id, unique_user_id, candidate, reload=False):
 """
 
 
-def build_graph(path="D:/Personal/code/pyg/required_data/",
+def build_graph(path=DEFAULT_DATA_DIR,
                 abl_list=None,
                 candidature_node=False,
                 ts_nodes=False,
@@ -682,9 +684,10 @@ def build_graph(path="D:/Personal/code/pyg/required_data/",
     )
 
     if error_analysis is not None:
-        Path(error_analysis).mkdir(parents=True, exist_ok=True)
-        unique_user_id.to_csv(error_analysis + "/user_id.csv", index=False)
-        unique_job_id.to_csv(error_analysis + "/job_id.csv", index=False)
+        error_analysis_dir = Path(error_analysis)
+        error_analysis_dir.mkdir(parents=True, exist_ok=True)
+        unique_user_id.to_csv(error_analysis_dir / "user_id.csv", index=False)
+        unique_job_id.to_csv(error_analysis_dir / "job_id.csv", index=False)
         print("Saved preprocessed data for error analysis.")
 
     print("Edges loaded")
@@ -837,4 +840,4 @@ def build_graph(path="D:/Personal/code/pyg/required_data/",
 
 
 if __name__ == '__main__':
-    graph = build_graph("/Users/devanshsharma/github/PathFinder/PathFinder/data", candidature_node=True, ts_nodes=True, ts_nodes_all=True)
+    graph = build_graph(DEFAULT_DATA_DIR, candidature_node=True, ts_nodes=True, ts_nodes_all=True)
