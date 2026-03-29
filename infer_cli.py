@@ -5,8 +5,8 @@ from pathlib import Path
 
 from candidate_input import (
     normalize_candidate_input,
-    normalize_job_input,
     prompt_candidate_input,
+    normalize_job_input,
     prompt_job_input,
 )
 
@@ -149,11 +149,11 @@ def _run_candidate_flow(artifacts) -> None:
 
         if job_idx is not None:
             log_interaction(
-                candidate_idx=candidate_idx,
-                job_idx=job_idx,
-                score=job.score,
-                ts=normalized_candidate.timestamp,
-            )
+            candidate_idx=candidature_idx,
+            job_idx=job_idx,
+            score=job.score,
+            ts=normalized_candidate.timestamp,
+        )
 
     # Retraining trigger
     if should_retrain(threshold=10):

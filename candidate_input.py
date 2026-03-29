@@ -7,6 +7,7 @@ from typing import Any
 from graph_builder import clean_salary
 from inference_types import CandidateInput, GraphMappings, NormalizedCandidateInput
 
+from inference_types import JobInput, NormalizedJobInput, GraphMappings
 
 def _prompt_optional(prompt_text: str) -> str | None:
     value = input(prompt_text).strip()
@@ -157,3 +158,77 @@ def normalize_candidate_input(
             "unmapped_experience": candidate.experience if candidate.experience and experience is None else None,
         },
     )
+
+from inference_types import JobInput, NormalizedJobInput
+from graph_builder import clean_salary
+
+
+def prompt_job_input() -> JobInput:
+    """
+    Collect job details from terminal.
+    """
+    skills_raw = input("Job skills (comma separated): ").strip()
+    salary_raw = _prompt_optional("Salary: ")
+    timestamp_raw = _prompt_optional("Timestamp or date (blank = now): ")
+
+    return JobInput(
+        job_id=input("Job ID: ").strip(),
+        description=input("Job description: ").strip(),
+        skills=_parse_skills(skills_raw),
+        contract=_prompt_optional("Contract: "),
+        experience=_prompt_optional("Experience: "),
+        salary=_parse_salary(salary_raw),
+        category=_prompt_optional("Category: "),
+        company=_prompt_optional("Company: "),
+        timestamp=_parse_timestamp(timestamp_raw),
+    )
+
+
+def normalize_job_input(
+    job: JobInput,
+    *,
+    graph_context: GraphMappings | dict[str, Any] | None = None,
+) -> NormalizedJobInput:
+    """
+    Convert job input into graph-compatible values.
+    """
+    mappings = graph_context if isinstance(graph_context, GraphMappings) else GraphMappings()
+    timestamp = job.timestamp or int(time.time())
+
+    normalized_skills = []
+    for skill in job.skills:
+        normalized = _normalize_label(skill, mappings.skill_to_idx)
+        if normalized:
+            normalized_skills.append(normalized)
+
+    contract = _normalize_label(job.contract, mappings.contract_to_idx)
+    experience = _normalize_label(job.experience, mappings.experience_to_idx)
+
+    salary_category = clean_salary(job.salary) if job.salary is not None else None
+    if salary_category not in mappings.salary_to_idx:
+        salary_category = None
+
+    category = _normalize_label(job.category, mappings.category_to_idx)
+    company = _normalize_label(job.company, mappings.company_to_idx)
+
+    yearmonth = _derive_yearmonth(
+        timestamp,
+        mappings.time_to_idx,
+        mappings.time_base_yearmonth,
+    )
+
+    return NormalizedJobInput(
+        job_id=job.job_id,
+        description=job.description,
+        skills=normalized_skills,
+        contract=contract,
+        experience=experience,
+        salary_category=salary_category,
+        category=category,
+        company=company,
+        timestamp=timestamp,
+        yearmonth=yearmonth,
+        extra={"raw_input": job.to_dict()},
+    )
+
+
