@@ -1,0 +1,155 @@
+# job_id map idx
+from copy import deepcopy
+from datetime import datetime
+from typing import Any
+import torch
+from torch_geometric.data import HeteroData
+
+from inference_types import GraphMappings
+
+def _append_1d_tensor(tensor: torch.Tensor, value: int | float, *, dtype=None):
+    if dtype is None:
+        dtype = tensor.dtype
+    v = torch.tensor([value], dtype=dtype, device=tensor.device)
+    return torch.cat([tensor, v], dim=0)
+
+def _append_2d_row(tensor: torch.Tensor, row: torch.Tensor):
+    row = row.to(device=tensor.device, dtype=tensor.dtype)
+    if row.dim() == 1:
+        row = row.unsqueeze(0)
+    return torch.cat([tensor, row], dim=0)
+
+def _append_edge(data: HeteroData, etype, s, t):
+    e = torch.tensor([[s], [t]], dtype=torch.long)
+    if "edge_index" in data[etype]:
+        data[etype].edge_index = torch.cat([data[etype].edge_index, e], dim=1)
+    else:
+        data[etype].edge_index = e
+
+def _bi_edge(data, fwd, rev, s, t):
+    _append_edge(data, fwd, s, t)
+    _append_edge(data, rev, t, s)
+
+def _encode_text(text: str, *, text_encoder: Any, feature_dim: int, dtype):
+    if text_encoder is None:
+        raise ValueError("text_encoder required")
+    vec = text_encoder.encode(text or "", convert_to_numpy=True)
+    x = torch.tensor(vec, dtype=dtype)
+    if x.numel() != feature_dim:
+        raise ValueError("feature dim mismatch")
+    return x
+
+def add_job_to_graph(
+    data: HeteroData,
+    job_payload: dict,
+    *,
+    mappings: GraphMappings,
+    text_encoder: Any,
+):
+    """
+    Add a new job node + edges (skills, contract, exp, category, company, time).
+    Updates mappings.job_id_to_idx and reverse.
+    """
+    data = deepcopy(data)
+
+    job_idx = int(data["job"].node_id.numel())
+    data["job"].node_id = _append_1d_tensor(data["job"].node_id, job_idx, dtype=torch.long)
+
+    # features
+    feat_dim = int(data["job"].x.size(1))
+    job_x = _encode_text(
+        job_payload.get("job_description_text", ""),
+        text_encoder=text_encoder,
+        feature_dim=feat_dim,
+        dtype=data["job"].x.dtype,
+    )
+    data["job"].x = _append_2d_row(data["job"].x, job_x)
+
+    # timestamp + time bucket
+    ts = int(job_payload.get("event_timestamp_epoch", 0))
+    if "timestamp" in data["job"]:
+        data["job"].timestamp = _append_1d_tensor(data["job"].timestamp, ts, dtype=torch.long)
+
+    # update mappings (job id)
+    job_id = job_payload.get("job_id")
+    mappings.job_id_to_idx[job_id] = job_idx
+    mappings.job_idx_to_id[job_idx] = job_id
+
+    # edges: skills (only link if known skill exists)
+    for s in job_payload.get("skills", []):
+        s_idx = mappings.skill_to_idx.get(s)
+        if s_idx is not None:
+            _bi_edge(
+                data,
+                ("job", "has", "skill"),
+                ("skill", "rev_has", "job"),
+                job_idx,
+                s_idx,
+            )
+
+    # contract
+    c = job_payload.get("employment_type")
+    if c is not None:
+        c_idx = mappings.contract_to_idx.get(c)
+        if c_idx is not None:
+            _bi_edge(
+                data,
+                ("job", "has_type", "contract"),
+                ("contract", "rev_has_type", "job"),
+                job_idx,
+                c_idx,
+            )
+
+    # experience
+    e = job_payload.get("experience_required")
+    if e is not None:
+        e_idx = mappings.experience_to_idx.get(e)
+        if e_idx is not None:
+            _bi_edge(
+                data,
+                ("job", "requires", "experience"),
+                ("experience", "rev_requires", "job"),
+                job_idx,
+                e_idx,
+            )
+
+    # category
+    for cat in job_payload.get("category", []):
+        cat_idx = mappings.__dict__.get("category_to_idx", {}).get(cat)
+        if cat_idx is not None:
+            _bi_edge(
+                data,
+                ("job", "is_in", "category"),
+                ("category", "rev_is_in", "job"),
+                job_idx,
+                cat_idx,
+            )
+
+    # company
+    comp = job_payload.get("company_owner")
+    comp_idx = mappings.__dict__.get("company_to_idx", {}).get(comp)
+    if comp_idx is not None:
+        _bi_edge(
+            data,
+            ("job", "is_for", "company"),
+            ("company", "rev_is_for", "job"),
+            job_idx,
+            comp_idx,
+        )
+
+    # time edge (bucket)
+    if mappings.time_to_idx:
+        dt = datetime.fromtimestamp(ts)
+        base = mappings.time_base_yearmonth
+        ym = dt.year * 12 + dt.month - 1 - base if base is not None else None
+        t_idx = mappings.time_to_idx.get(ym) if ym is not None else None
+        if t_idx is not None:
+            _bi_edge(
+                data,
+                ("job", "has_time", "time"),
+                ("time", "rev_has_time", "job"),
+                job_idx,
+                t_idx,
+            )
+
+    return data, job_idx

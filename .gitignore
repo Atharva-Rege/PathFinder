@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+
+# Large data files
+required_data/
+
+# Jupyter notebooks (optional)
+*.ipynb
+
+# OS files
+.DS_Store
