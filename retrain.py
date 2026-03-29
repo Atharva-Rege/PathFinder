@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-
+import os
 import torch
 import torch.nn.functional as F
 from torch_geometric.loader import LinkNeighborLoader
@@ -30,9 +30,13 @@ def load_interactions():
 def main():
     print("Starting incremental retraining...")
 
+    
+
+    model_path = MODEL_PATH if os.path.exists(MODEL_PATH) else None
+
     artifacts = load_runtime_artifacts(
         data_dir=DATA_DIR,
-        model_path=MODEL_PATH,
+        model_path=model_path,
         config=None,
     )
 

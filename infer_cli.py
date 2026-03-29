@@ -14,7 +14,8 @@ from interaction_logger import log_interaction
 from retrain_trigger import should_retrain
 import subprocess
 import torch
-
+import sys
+import os
 from graph_runtime import (
     add_candidate_to_graph,
     add_job_to_graph,
@@ -159,14 +160,18 @@ def _run_candidate_flow(artifacts) -> None:
     if should_retrain(threshold=10):
         print("Retraining triggered")
 
-        subprocess.run(["python", "retrain.py"])
+        
+        subprocess.run([sys.executable, "retrain.py"])
 
-        artifacts.model = torch.load(
-            "model.pt",
-            map_location="cpu",
-            weights_only=False
-        )
-        artifacts.model.eval()
+        if os.path.exists("model.pt"):
+            artifacts.model = torch.load(
+                "model.pt",
+                map_location="cpu",
+                weights_only=False
+            )
+            artifacts.model.eval()
+        else:
+            print("(first run)")
 
 
 def _run_job_flow(artifacts) -> None:
