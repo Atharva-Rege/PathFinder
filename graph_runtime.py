@@ -18,6 +18,8 @@ from inference_types import (
     RuntimeArtifacts,
 )
 
+from graph_persistence import load_graph, load_mappings, save_graph, save_mappings
+import os
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = MODULE_DIR / "required_data"
 DEFAULT_OUTPUT_DIR = MODULE_DIR / "output"
@@ -45,6 +47,27 @@ def _merge_runtime_config(config: dict[str, Any] | None) -> dict[str, Any]:
     if config is not None:
         merged.update(config)
     return merged
+
+
+def _hydrate_mappings(mappings: GraphMappings) -> GraphMappings:
+    """
+    Backfill fields that may be missing from older persisted GraphMappings objects.
+    """
+    if not hasattr(mappings, "candidate_idx_to_id"):
+        mappings.candidate_idx_to_id = {}
+    if not hasattr(mappings, "candidate_id_to_idx"):
+        mappings.candidate_id_to_idx = {}
+    if not hasattr(mappings, "job_idx_to_id"):
+        mappings.job_idx_to_id = {}
+    if not hasattr(mappings, "job_id_to_idx"):
+        mappings.job_id_to_idx = {}
+
+    if not mappings.candidate_id_to_idx and mappings.candidate_idx_to_id:
+        mappings.candidate_id_to_idx = {
+            candidate_id: candidate_idx
+            for candidate_idx, candidate_id in mappings.candidate_idx_to_id.items()
+        }
+    return mappings
 
 
 def _build_graph_mappings(data_dir: str | Path, config: dict[str, Any]) -> GraphMappings:
@@ -127,6 +150,8 @@ def _build_graph_mappings(data_dir: str | Path, config: dict[str, Any]) -> Graph
             if use_time_nodes and len(unique_time_id) > 0
             else None
         ),
+        candidate_idx_to_id={int(row.mappedID): row.nameID for row in unique_user_id.itertuples()},
+        candidate_id_to_idx={row.nameID: int(row.mappedID) for row in unique_user_id.itertuples()},
         job_idx_to_id={int(row.mappedID): row.jobID for row in unique_job_id.itertuples()},
         job_id_to_idx={row.jobID: int(row.mappedID) for row in unique_job_id.itertuples()},
     )
@@ -238,7 +263,7 @@ def _ensure_graph_store_initialized(
             mappings = torch.load(mappings_path, map_location="cpu", weights_only=False)
         except TypeError:
             mappings = torch.load(mappings_path, map_location="cpu")
-        return graph, mappings
+        return graph, _hydrate_mappings(mappings)
 
     graph_abl_list = config["model_list_abl"][:8]
     use_time_nodes = bool(config["model_list_abl"][8])
@@ -273,11 +298,9 @@ def load_runtime_artifacts(
     model_path: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> RuntimeArtifacts:
-    """
-    Load the trained graph, checkpoint, and node lookup tables for inference.
-    """
+
     runtime_config = _merge_runtime_config(config)
-    runtime_config["data_dir"] = Path(data_dir)
+    runtime_config["data_dir"] = data_dir
 
     graph, mappings = _ensure_graph_store_initialized(
         data_dir=data_dir,
@@ -285,12 +308,15 @@ def load_runtime_artifacts(
     )
 
     resolved_model_path = model_path or _default_model_path(runtime_config)
+
     try:
         model = torch.load(resolved_model_path, map_location="cpu", weights_only=False)
     except TypeError:
         model = torch.load(resolved_model_path, map_location="cpu")
+
     model = extend_model_for_new_nodes(model, graph)
     model.eval()
+
     text_encoder = _load_text_encoder(runtime_config["sentence_transformer_model"])
 
     return RuntimeArtifacts(
@@ -369,6 +395,10 @@ def add_candidate_to_graph(
     if copy_data:
         data = deepcopy(data)
 
+    candidate_id = candidate.candidate_id or f"candidate_{int(data['candidate'].node_id.numel())}"
+    if candidate_id in mappings.candidate_id_to_idx:
+        raise ValueError(f"Candidate ID `{candidate_id}` already exists in the persistent graph.")
+
     data, time_idx, time_created = ensure_time_node(
         data,
         candidate.timestamp,
@@ -392,6 +422,8 @@ def add_candidate_to_graph(
     )
     data["candidate"].x = _append_2d_row(data["candidate"].x, candidate_features)
     data["candidate"].node_id = _append_1d_tensor(data["candidate"].node_id, candidate_idx, dtype=torch.long)
+    mappings.candidate_idx_to_id[candidate_idx] = candidate_id
+    mappings.candidate_id_to_idx[candidate_id] = candidate_idx
 
     if "timestamp" in data["candidate"]:
         data["candidate"].timestamp = _append_1d_tensor(
@@ -677,6 +709,125 @@ def add_temporary_candidature(
         )
 
     return data, candidature_idx, insertion_summary
+
+
+def add_temporary_job_query_candidature(
+    data: HeteroData,
+    *,
+    job_idx: int,
+    timestamp: int,
+    mappings: GraphMappings | None = None,
+    copy_data: bool = False,
+) -> tuple[HeteroData, int, GraphInsertionSummary]:
+    """
+    Add a query-time candidature node linked to a job and time for candidate ranking.
+    """
+    if data is None:
+        raise ValueError("`data` must be a valid HeteroData instance.")
+    if mappings is None:
+        mappings = GraphMappings()
+
+    if copy_data:
+        data = deepcopy(data)
+
+    data, time_idx, time_created = ensure_time_node(
+        data,
+        timestamp,
+        mappings=mappings,
+        copy_data=False,
+    )
+
+    candidature_idx = int(data["candidature"].node_id.numel())
+    insertion_summary = GraphInsertionSummary(
+        candidate_idx=-1,
+        candidature_idx=candidature_idx,
+        candidature_time_idx=time_idx,
+        job_idx=job_idx,
+        time_node_created=time_created,
+    )
+    data["candidature"].node_id = _append_1d_tensor(
+        data["candidature"].node_id,
+        candidature_idx,
+        dtype=torch.long,
+    )
+
+    if "timestamp" in data["candidature"]:
+        data["candidature"].timestamp = _append_1d_tensor(
+            data["candidature"].timestamp,
+            timestamp,
+            dtype=torch.long,
+        )
+
+    _add_bidirectional_edge(
+        data,
+        ("candidature", "has_application", "job"),
+        ("job", "rev_has_application", "candidature"),
+        candidature_idx,
+        job_idx,
+    )
+
+    if time_idx is not None:
+        _add_bidirectional_edge(
+            data,
+            ("candidature", "has_time", "time"),
+            ("time", "rev_has_time", "candidature"),
+            candidature_idx,
+            time_idx,
+        )
+
+    return data, candidature_idx, insertion_summary
+
+
+def attach_candidature_to_job(
+    data: HeteroData,
+    *,
+    candidature_idx: int,
+    job_idx: int,
+    copy_data: bool = False,
+) -> HeteroData:
+    """
+    Link an existing candidature node to a job node.
+    """
+    if data is None:
+        raise ValueError("`data` must be a valid HeteroData instance.")
+
+    if copy_data:
+        data = deepcopy(data)
+
+    _add_bidirectional_edge(
+        data,
+        ("candidature", "has_application", "job"),
+        ("job", "rev_has_application", "candidature"),
+        candidature_idx,
+        job_idx,
+    )
+    return data
+
+
+def attach_candidate_to_candidature(
+    data: HeteroData,
+    *,
+    candidate_idx: int,
+    candidature_idx: int,
+    copy_data: bool = False,
+) -> HeteroData:
+    """
+    Link an existing candidate node to a candidature node.
+    """
+    if data is None:
+        raise ValueError("`data` must be a valid HeteroData instance.")
+
+    if copy_data:
+        data = deepcopy(data)
+
+    _add_bidirectional_edge(
+        data,
+        ("candidate", "applied_with", "candidature"),
+        ("candidature", "rev_applied_with", "candidate"),
+        candidate_idx,
+        candidature_idx,
+    )
+    return data
 
 
 def extend_model_for_new_nodes(model: torch.nn.Module, data: HeteroData) -> torch.nn.Module:

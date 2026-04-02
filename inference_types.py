@@ -8,6 +8,7 @@ from torch_geometric.data import HeteroData
 class CandidateInput:
     """Raw candidate payload collected from the terminal."""
 
+    candidate_id: str | None = None
     description: str = ""
     skills: list[str] = field(default_factory=list)
     contract: str | None = None
@@ -18,6 +19,7 @@ class CandidateInput:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "candidate_id": self.candidate_id,
             "description": self.description,
             "skills": list(self.skills),
             "contract": self.contract,
@@ -60,6 +62,7 @@ class JobInput:
 class NormalizedCandidateInput:
     """Candidate payload after mapping into graph-compatible values."""
 
+    candidate_id: str | None
     description: str
     skills: list[str]
     contract: str | None
@@ -72,6 +75,7 @@ class NormalizedCandidateInput:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "candidate_id": self.candidate_id,
             "description": self.description,
             "skills": list(self.skills),
             "contract": self.contract,
@@ -134,6 +138,8 @@ class GraphMappings:
     company_to_idx: dict[str, int] = field(default_factory=dict)
     time_to_idx: dict[int, int] = field(default_factory=dict)
     time_base_yearmonth: int | None = None
+    candidate_idx_to_id: dict[int, Any] = field(default_factory=dict)
+    candidate_id_to_idx: dict[Any, int] = field(default_factory=dict)
     job_idx_to_id: dict[int, Any] = field(default_factory=dict)
     job_id_to_idx: dict[Any, int] = field(default_factory=dict)
 
@@ -148,6 +154,8 @@ class GraphMappings:
             "company_to_idx": dict(self.company_to_idx),
             "time_to_idx": dict(self.time_to_idx),
             "time_base_yearmonth": self.time_base_yearmonth,
+            "candidate_idx_to_id": dict(self.candidate_idx_to_id),
+            "candidate_id_to_idx": dict(self.candidate_id_to_idx),
             "job_idx_to_id": dict(self.job_idx_to_id),
             "job_id_to_idx": dict(self.job_id_to_idx),
         }
@@ -195,6 +203,24 @@ class RankedJob:
     def to_dict(self) -> dict[str, Any]:
         return {
             "job_id": self.job_id,
+            "score": self.score,
+            "rank": self.rank,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass
+class RankedCandidate:
+    """Single ranked candidate inference result."""
+
+    candidate_id: Any
+    score: float
+    rank: int
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
             "score": self.score,
             "rank": self.rank,
             "metadata": dict(self.metadata),
