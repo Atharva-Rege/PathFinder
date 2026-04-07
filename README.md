@@ -165,26 +165,14 @@ Ranking → Interaction Logging → Threshold Check → Retraining → Model Rel
 * Accuracy
 
 ---
-
 ## Frontend Output
 
 <p align="center">
-  <img src="images/fe.jpg" width="700"/>
+  <img src="./images/fe.jpg" width="700"/>
 </p>
-
----
 
 ## Sample Output
 
 <p align="center">
-  <img src="images/sample_op.jpg" width="700"/>
+  <img src="./images/sample_op.jpg" width="700"/>
 </p>
-
----
-
-## Summary
-
-PathFinder combines graph-based learning, temporal modeling, and online learning to build an adaptive and scalable job recommendation system.
-It effectively handles cold-start scenarios and dynamic data, making it suitable for real-world recruitment platforms.
-
-
