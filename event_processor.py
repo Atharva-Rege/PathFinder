@@ -3,11 +3,11 @@ from pathlib import Path
 
 from graph_runtime import (
     add_candidate_to_graph,
+    add_job_to_graph,
     add_temporary_candidature,
     extend_model_for_new_nodes,
     load_runtime_artifacts,
 )
-from job_runtime import add_job_to_graph
 from graph_persistence import save_graph, save_mappings
 from inference_types import NormalizedCandidateInput
 from ranker import rank_jobs_for_candidature
@@ -61,7 +61,7 @@ def process_candidate_event(payload: dict):
 def process_job_event(payload: dict):
     artifacts = load_runtime_artifacts(data_dir=str(OUTPUT_DIR.parent / "required_data"))
 
-    data, j_idx = add_job_to_graph(
+    data, j_idx, _ = add_job_to_graph(
         artifacts.data,
         payload["job"],
         mappings=artifacts.mappings,

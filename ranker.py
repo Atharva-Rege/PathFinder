@@ -10,6 +10,28 @@ from inference_types import GraphMappings, RankedCandidate, RankedJob
 from utils import transform
 
 
+def _cosine_scores_against_pool(
+    *,
+    query_vector: torch.Tensor,
+    pool_vectors: torch.Tensor,
+) -> torch.Tensor:
+    """Compute cosine scores between one query vector and a pool of vectors."""
+    query = query_vector.detach().cpu().float().reshape(1, -1)
+    pool = pool_vectors.detach().cpu().float()
+
+    query = torch.nn.functional.normalize(query, p=2, dim=1)
+    pool = torch.nn.functional.normalize(pool, p=2, dim=1)
+    return (query @ pool.T).reshape(-1)
+
+
+def _job_idx_from_candidature(data: Any, candidature_idx: int) -> int:
+    edge_index = data["candidature", "has_application", "job"].edge_index
+    matched = edge_index[1, edge_index[0] == int(candidature_idx)]
+    if matched.numel() == 0:
+        raise ValueError(f"No job attached to candidature index {candidature_idx}")
+    return int(matched[0].item())
+
+
 def _print_ranking_summary(
     *,
     predict_edge: tuple[str, str, str],
@@ -38,8 +60,10 @@ def _resolve_ranking_config(config: dict[str, Any] | None) -> dict[str, Any]:
         "num_neigh": config.get("num_neigh", [20, 10]),
         "strategy": config.get("strategy", "uniform"),
         "batch_size": config.get("eval_batch_size", 3 * 128),
+        "reverse_batch_size": config.get("reverse_eval_batch_size", 1024),
         "use_temporal": config.get("use_temporal", True),
         "job_recency_days": config.get("job_recency_days", 365),
+        "inference_seed": int(config.get("inference_seed", 42)),
     }
 
 
@@ -48,6 +72,7 @@ def rank_jobs_for_candidature(
     model: Any,
     data: Any,
     candidature_idx: int,
+    allowed_job_indices: list[int] | None = None,
     config: dict[str, Any] | None = None,
     mappings: GraphMappings | None = None,
     top_k: int = 10,
@@ -63,14 +88,21 @@ def rank_jobs_for_candidature(
     ranking_config = _resolve_ranking_config(config)
     predict_edge = ranking_config["predict_edge"]
     device = next(model.parameters()).device
+    use_temporal_for_jobs = bool(ranking_config["use_temporal"])
 
     all_job_indices_all = data[predict_edge[2]].node_id.clone().long()
+    if allowed_job_indices is not None:
+        allowed_tensor = torch.tensor(sorted(set(int(idx) for idx in allowed_job_indices)), dtype=torch.long)
+        if allowed_tensor.numel() == 0:
+            return []
+        allowed_mask = torch.isin(all_job_indices_all, allowed_tensor)
+        all_job_indices_all = all_job_indices_all[allowed_mask]
     if all_job_indices_all.numel() == 0:
         return []
 
     all_job_indices = all_job_indices_all
     candidature_timestamp: int | None = None
-    if ranking_config["use_temporal"]:
+    if use_temporal_for_jobs:
         candidature_timestamp = int(data[predict_edge[0]].timestamp[int(candidature_idx)].item())
         job_timestamps = data[predict_edge[2]].timestamp[all_job_indices_all].long()
         valid_job_mask = job_timestamps <= candidature_timestamp
@@ -98,14 +130,16 @@ def rank_jobs_for_candidature(
         "edge_label_index": (predict_edge, edge_label_index),
         "edge_label": edge_label,
         "neg_sampling_ratio": 0,
-        "batch_size": ranking_config["batch_size"],
+        "batch_size": ranking_config["reverse_batch_size"],
         "shuffle": False,
     }
 
-    if ranking_config["use_temporal"]:
+    if use_temporal_for_jobs:
+        if candidature_timestamp is None:
+            raise ValueError("Temporal ranking requires candidature timestamp.")
         edge_label_time = torch.full(
             (all_job_indices.numel(),),
-            candidature_timestamp,
+            int(candidature_timestamp),
             dtype=torch.long,
         )
         loader_kwargs.update(
@@ -122,11 +156,13 @@ def rank_jobs_for_candidature(
         candidature_idx=int(candidature_idx),
         num_jobs=int(all_job_indices.numel()),
         num_jobs_before_filter=int(all_job_indices_all.numel()),
-        use_temporal=ranking_config["use_temporal"],
+        use_temporal=use_temporal_for_jobs,
         candidature_timestamp=candidature_timestamp,
         job_recency_days=ranking_config["job_recency_days"],
     )
 
+    # LinkNeighborLoader sampling is stochastic; fix seed for deterministic ranking across requests.
+    torch.manual_seed(ranking_config["inference_seed"])
     ranking_loader = LinkNeighborLoader(**loader_kwargs)
 
     model.eval()
@@ -134,7 +170,7 @@ def rank_jobs_for_candidature(
     with torch.no_grad():
         for sampled_data in ranking_loader:
             sampled_data = sampled_data.to(device)
-            predictions = model(sampled_data).detach().cpu()
+            predictions = model(sampled_data, predict_edge=predict_edge).detach().cpu()
             batch_job_indices = sampled_data[predict_edge[2]]["node_id"][
                 sampled_data[predict_edge[0], predict_edge[1], predict_edge[2]]["edge_label_index"][1]
             ].detach().cpu()
@@ -165,6 +201,7 @@ def rank_candidates_for_job(
     model: Any,
     data: Any,
     candidature_idx: int,
+    allowed_candidate_indices: list[int] | None = None,
     config: dict[str, Any] | None = None,
     mappings: GraphMappings | None = None,
     top_k: int = 10,
@@ -180,14 +217,21 @@ def rank_candidates_for_job(
     ranking_config = _resolve_ranking_config(config)
     predict_edge = ("candidate", "applied_with", "candidature")
     device = next(model.parameters()).device
+    use_temporal_for_reverse = bool(ranking_config["use_temporal"])
 
     all_candidate_indices_all = data[predict_edge[0]].node_id.clone().long()
+    if allowed_candidate_indices is not None:
+        allowed_tensor = torch.tensor(sorted(set(int(idx) for idx in allowed_candidate_indices)), dtype=torch.long)
+        if allowed_tensor.numel() == 0:
+            return []
+        allowed_mask = torch.isin(all_candidate_indices_all, allowed_tensor)
+        all_candidate_indices_all = all_candidate_indices_all[allowed_mask]
     if all_candidate_indices_all.numel() == 0:
         return []
 
     all_candidate_indices = all_candidate_indices_all
     candidature_timestamp: int | None = None
-    if ranking_config["use_temporal"]:
+    if use_temporal_for_reverse:
         candidature_timestamp = int(data[predict_edge[2]].timestamp[int(candidature_idx)].item())
         candidate_timestamps = data[predict_edge[0]].timestamp[all_candidate_indices_all].long()
         valid_candidate_mask = candidate_timestamps <= candidature_timestamp
@@ -219,10 +263,12 @@ def rank_candidates_for_job(
         "shuffle": False,
     }
 
-    if ranking_config["use_temporal"]:
+    if use_temporal_for_reverse:
+        if candidature_timestamp is None:
+            raise ValueError("Temporal ranking requires candidature timestamp.")
         edge_label_time = torch.full(
             (all_candidate_indices.numel(),),
-            candidature_timestamp,
+            int(candidature_timestamp),
             dtype=torch.long,
         )
         loader_kwargs.update(
@@ -230,6 +276,7 @@ def rank_candidates_for_job(
                 "edge_label_time": edge_label_time,
                 "temporal_strategy": ranking_config["strategy"],
                 "time_attr": "timestamp",
+                "transform": transform,
             }
         )
 
@@ -238,28 +285,27 @@ def rank_candidates_for_job(
     print(f"  Query candidature index used for ranking: {candidature_idx}")
     print(f"  Number of candidates scored: {int(all_candidate_indices.numel())}")
     print(f"  Number of candidates before temporal filtering: {int(all_candidate_indices_all.numel())}")
-    print(f"  Temporal sampling enabled: {ranking_config['use_temporal']}")
+    print(f"  Temporal sampling enabled: {use_temporal_for_reverse}")
     print(f"  Job recency window (days): {ranking_config['job_recency_days']}")
-    if candidature_timestamp is not None:
+    if use_temporal_for_reverse and candidature_timestamp is not None:
         print(f"  Query timestamp: {datetime.fromtimestamp(candidature_timestamp).isoformat(sep=' ')}")
 
+    # LinkNeighborLoader sampling is stochastic; fix seed for deterministic ranking across requests.
+    torch.manual_seed(ranking_config["inference_seed"])
     ranking_loader = LinkNeighborLoader(**loader_kwargs)
 
     model.eval()
     scored_candidates: list[tuple[float, int]] = []
-    original_predict_edge = model.predict_edge
     with torch.no_grad():
-        model.predict_edge = predict_edge
         for sampled_data in ranking_loader:
             sampled_data = sampled_data.to(device)
-            predictions = model(sampled_data).detach().cpu()
+            predictions = model(sampled_data, predict_edge=predict_edge).detach().cpu()
             batch_candidate_indices = sampled_data[predict_edge[0]]["node_id"][
                 sampled_data[predict_edge[0], predict_edge[1], predict_edge[2]]["edge_label_index"][0]
             ].detach().cpu()
 
             for score_tensor, candidate_idx_tensor in zip(predictions, batch_candidate_indices):
                 scored_candidates.append((float(score_tensor.item()), int(candidate_idx_tensor.item())))
-    model.predict_edge = original_predict_edge
 
     scored_candidates.sort(key=lambda item: item[0], reverse=True)
     top_scored_candidates = scored_candidates[:top_k]

@@ -16,3 +16,6 @@ tqdm
 tensorboard
 ipykernel
 notebook
+fastapi
+uvicorn
+pydantic

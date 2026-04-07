@@ -147,8 +147,13 @@ class Model(torch.nn.Module):
         self.gnn = to_hetero(self.gnn, metadata=data.metadata())
         self.classifier = Classifier()
 
-    def forward(self, data: HeteroData) -> Tensor:
+    def forward(
+        self,
+        data: HeteroData,
+        predict_edge: tuple[str, str, str] | None = None,
+    ) -> Tensor:
         list_abl = self.list_abl
+        edge_to_predict = predict_edge or self.predict_edge
         x_dict = {}
 
         # remove feature
@@ -160,7 +165,7 @@ class Model(torch.nn.Module):
                 self.user_emb(data["candidate"].node_id))
             x_dict["job"] = self.job_lin(data["job"].x) + self.job_lin_emb(self.job_emb(data["job"].node_id))
 
-        if self.predict_edge[0] == "candidature":
+        if hasattr(self, "candidature_emb") and "candidature" in data.node_types:
             x_dict["candidature"] = self.candidature_emb(data["candidature"].node_id)
 
         if list_abl[0] == 1:
@@ -190,9 +195,9 @@ class Model(torch.nn.Module):
         # `edge_index_dict` holds all edge indices of all edge types
         x_dict = self.gnn(x_dict, data.edge_index_dict)
         pred = self.classifier(
-            x_dict[self.predict_edge[0]],
-            x_dict[self.predict_edge[2]],
-            data[self.predict_edge[0], self.predict_edge[1], self.predict_edge[2]].edge_label_index,
+            x_dict[edge_to_predict[0]],
+            x_dict[edge_to_predict[2]],
+            data[edge_to_predict[0], edge_to_predict[1], edge_to_predict[2]].edge_label_index,
         )
 
         return pred

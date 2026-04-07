@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -19,6 +19,7 @@ from inference_types import (
 )
 
 from graph_persistence import load_graph, load_mappings, save_graph, save_mappings
+from text_encoder_runtime import build_text_encoder
 import os
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = MODULE_DIR / "required_data"
@@ -37,7 +38,8 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "num_neigh": [20, 10],
     "strategy": "uniform",
     "eval_batch_size": 3 * 128,
-    "job_recency_days": 365,
+    "reverse_eval_batch_size": 1024,
+    "job_recency_days": None,
     "model_list_abl": [1, 1, 1, 1, 1, 1, 1, 1, 1],
 }
 
@@ -70,7 +72,12 @@ def _hydrate_mappings(mappings: GraphMappings) -> GraphMappings:
     return mappings
 
 
+def _to_int(value: Any) -> int:
+    return int(cast(Any, value))
+
+
 def _build_graph_mappings(data_dir: str | Path, config: dict[str, Any]) -> GraphMappings:
+    resolved_data_dir = Path(data_dir)
     (
         candidate,
         candidate_skills,
@@ -92,7 +99,7 @@ def _build_graph_mappings(data_dir: str | Path, config: dict[str, Any]) -> Graph
         job_company,
         job_company_full,
         skill_concept,
-    ) = load_data(data_dir)
+    ) = load_data(resolved_data_dir)
     _ = candidate, job, skill, hierarchy, job_candidates, candidate_skills, job_skills, job_company
 
     (
@@ -132,28 +139,28 @@ def _build_graph_mappings(data_dir: str | Path, config: dict[str, Any]) -> Graph
     use_time_nodes = bool(abl[8])
 
     return GraphMappings(
-        skill_to_idx={str(row.skillID): int(row.mappedID) for row in unique_skill_id.itertuples()} if abl[0] else {},
-        contract_to_idx={str(row.contractID): int(row.mappedID) for row in unique_contract_id.itertuples()} if abl[1] else {},
-        origin_to_idx={str(row.originID): int(row.mappedID) for row in unique_origin_id.itertuples()} if abl[2] else {},
-        experience_to_idx={str(row.expID): int(row.mappedID) for row in unique_exp_id.itertuples()} if abl[3] else {},
-        salary_to_idx={str(row.salaryID): int(row.mappedID) for row in unique_salary_id.itertuples()} if abl[4] else {},
-        category_to_idx={str(row.categoryID): int(row.mappedID) for row in unique_category_id.itertuples()} if abl[5] else {},
-        company_to_idx={str(row.companyID): int(row.mappedID) for row in unique_company_id.itertuples()} if abl[6] else {},
-        time_to_idx={int(row.timeID): int(row.mappedID) for row in unique_time_id.itertuples()} if use_time_nodes else {},
+        skill_to_idx={str(row.skillID): _to_int(row.mappedID) for row in unique_skill_id.itertuples()} if abl[0] else {},
+        contract_to_idx={str(row.contractID): _to_int(row.mappedID) for row in unique_contract_id.itertuples()} if abl[1] else {},
+        origin_to_idx={str(row.originID): _to_int(row.mappedID) for row in unique_origin_id.itertuples()} if abl[2] else {},
+        experience_to_idx={str(row.expID): _to_int(row.mappedID) for row in unique_exp_id.itertuples()} if abl[3] else {},
+        salary_to_idx={str(row.salaryID): _to_int(row.mappedID) for row in unique_salary_id.itertuples()} if abl[4] else {},
+        category_to_idx={str(row.categoryID): _to_int(row.mappedID) for row in unique_category_id.itertuples()} if abl[5] else {},
+        company_to_idx={str(row.companyID): _to_int(row.mappedID) for row in unique_company_id.itertuples()} if abl[6] else {},
+        time_to_idx={_to_int(row.timeID): _to_int(row.mappedID) for row in unique_time_id.itertuples()} if use_time_nodes else {},
         time_base_yearmonth=(
             min(
-                datetime.fromtimestamp(int(row.timestamp)).year * 12
-                + datetime.fromtimestamp(int(row.timestamp)).month
+                datetime.fromtimestamp(_to_int(row.timestamp)).year * 12
+                + datetime.fromtimestamp(_to_int(row.timestamp)).month
                 - 1
                 for row in unique_time_id.itertuples()
             )
             if use_time_nodes and len(unique_time_id) > 0
             else None
         ),
-        candidate_idx_to_id={int(row.mappedID): row.nameID for row in unique_user_id.itertuples()},
-        candidate_id_to_idx={row.nameID: int(row.mappedID) for row in unique_user_id.itertuples()},
-        job_idx_to_id={int(row.mappedID): row.jobID for row in unique_job_id.itertuples()},
-        job_id_to_idx={row.jobID: int(row.mappedID) for row in unique_job_id.itertuples()},
+        candidate_idx_to_id={_to_int(row.mappedID): row.nameID for row in unique_user_id.itertuples()},
+        candidate_id_to_idx={row.nameID: _to_int(row.mappedID) for row in unique_user_id.itertuples()},
+        job_idx_to_id={_to_int(row.mappedID): row.jobID for row in unique_job_id.itertuples()},
+        job_id_to_idx={row.jobID: _to_int(row.mappedID) for row in unique_job_id.itertuples()},
     )
 
 
@@ -174,14 +181,7 @@ def _mappings_path(config: dict[str, Any]) -> Path:
 
 
 def _load_text_encoder(model_name: str) -> Any:
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise ImportError(
-            "sentence-transformers is required for candidate and job text encoding."
-        ) from exc
-
-    return SentenceTransformer(model_name)
+    return build_text_encoder(model_name)
 
 
 def _encode_text(
@@ -223,6 +223,18 @@ def _append_edge(
     src_idx: int,
     dst_idx: int,
 ) -> None:
+    src_node_type, _, dst_node_type = edge_type
+    src_count = int(data[src_node_type].node_id.numel())
+    dst_count = int(data[dst_node_type].node_id.numel())
+    if src_idx < 0 or src_idx >= src_count:
+        raise ValueError(
+            f"Source index {src_idx} is out of bounds for node type `{src_node_type}` (size={src_count})."
+        )
+    if dst_idx < 0 or dst_idx >= dst_count:
+        raise ValueError(
+            f"Destination index {dst_idx} is out of bounds for node type `{dst_node_type}` (size={dst_count})."
+        )
+
     edge_tensor = torch.tensor([[src_idx], [dst_idx]], dtype=torch.long)
     if "edge_index" in data[edge_type]:
         data[edge_type].edge_index = torch.cat([data[edge_type].edge_index, edge_tensor], dim=1)
@@ -241,6 +253,25 @@ def _add_bidirectional_edge(
     _append_edge(data, reverse_edge, dst_idx, src_idx)
 
 
+def _clear_edges_for_node(
+    data: HeteroData,
+    edge_type: tuple[str, str, str],
+    node_idx: int,
+    *,
+    direction: str,
+) -> None:
+    """Remove all edges that point to/from a node for one edge type."""
+    if edge_type not in data.edge_types:
+        return
+    if "edge_index" not in data[edge_type]:
+        return
+
+    axis = 0 if direction == "src" else 1
+    edge_index = data[edge_type].edge_index
+    keep_mask = edge_index[axis] != int(node_idx)
+    data[edge_type].edge_index = edge_index[:, keep_mask]
+
+
 def _timestamp_to_absolute_yearmonth(timestamp: int) -> int:
     dt_value = datetime.fromtimestamp(int(timestamp))
     return dt_value.year * 12 + dt_value.month - 1
@@ -251,6 +282,7 @@ def _ensure_graph_store_initialized(
     data_dir: str | Path,
     config: dict[str, Any],
 ) -> tuple[HeteroData, GraphMappings]:
+    resolved_data_dir = Path(data_dir)
     snapshot_path = _graph_snapshot_path(config)
     mappings_path = _mappings_path(config)
 
@@ -268,14 +300,14 @@ def _ensure_graph_store_initialized(
     graph_abl_list = config["model_list_abl"][:8]
     use_time_nodes = bool(config["model_list_abl"][8])
     graph = build_graph(
-        data_dir,
+        resolved_data_dir,
         abl_list=graph_abl_list,
         candidature_node=config["use_candidature_node"],
         ts_nodes=config["use_temporal"],
         ts_nodes_all=config["ts_nodes_all"],
         ts_attr=use_time_nodes,
     )
-    mappings = _build_graph_mappings(data_dir, config)
+    mappings = _build_graph_mappings(resolved_data_dir, config)
     save_runtime_state(data=graph, mappings=mappings, config=config)
     return graph, mappings
 
@@ -298,12 +330,13 @@ def load_runtime_artifacts(
     model_path: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> RuntimeArtifacts:
+    resolved_data_dir = Path(data_dir)
 
     runtime_config = _merge_runtime_config(config)
-    runtime_config["data_dir"] = data_dir
+    runtime_config["data_dir"] = resolved_data_dir
 
     graph, mappings = _ensure_graph_store_initialized(
-        data_dir=data_dir,
+        data_dir=resolved_data_dir,
         config=runtime_config,
     )
 
@@ -504,6 +537,140 @@ def add_candidate_to_graph(
     return data, candidate_idx, insertion_summary
 
 
+def update_candidate_in_graph(
+    data: HeteroData,
+    candidate: NormalizedCandidateInput,
+    *,
+    mappings: GraphMappings | None = None,
+    text_encoder: Any | None = None,
+    copy_data: bool = False,
+) -> tuple[HeteroData, int, GraphInsertionSummary]:
+    """Update an existing candidate node's features and attribute edges."""
+    if data is None:
+        raise ValueError("`data` must be a valid HeteroData instance.")
+    if mappings is None:
+        mappings = GraphMappings()
+
+    if candidate.candidate_id is None:
+        raise ValueError("Candidate update requires a non-null candidate_id.")
+    if candidate.candidate_id not in mappings.candidate_id_to_idx:
+        raise ValueError(f"Candidate ID `{candidate.candidate_id}` does not exist in the persistent graph.")
+
+    if copy_data:
+        data = deepcopy(data)
+
+    candidate_idx = int(mappings.candidate_id_to_idx[candidate.candidate_id])
+
+    data, time_idx, time_created = ensure_time_node(
+        data,
+        candidate.timestamp,
+        mappings=mappings,
+        copy_data=False,
+    )
+
+    insertion_summary = GraphInsertionSummary(
+        candidate_idx=candidate_idx,
+        candidate_time_idx=time_idx,
+        time_node_created=time_created,
+    )
+
+    feature_dim = int(data["candidate"].x.size(1))
+    candidate_features = _encode_text(
+        candidate.description,
+        text_encoder=text_encoder,
+        feature_dim=feature_dim,
+        dtype=data["candidate"].x.dtype,
+    )
+    data["candidate"].x[candidate_idx] = candidate_features.to(data["candidate"].x.device)
+
+    if "timestamp" in data["candidate"]:
+        data["candidate"].timestamp[candidate_idx] = int(candidate.timestamp)
+
+    _clear_edges_for_node(data, ("candidate", "has", "skill"), candidate_idx, direction="src")
+    _clear_edges_for_node(data, ("skill", "rev_has", "candidate"), candidate_idx, direction="dst")
+    _clear_edges_for_node(data, ("candidate", "work_on", "contract"), candidate_idx, direction="src")
+    _clear_edges_for_node(data, ("contract", "rev_work_on", "candidate"), candidate_idx, direction="dst")
+    _clear_edges_for_node(data, ("candidate", "was_found_on", "origin"), candidate_idx, direction="src")
+    _clear_edges_for_node(data, ("origin", "rev_was_found_on", "candidate"), candidate_idx, direction="dst")
+    _clear_edges_for_node(data, ("candidate", "has_gain", "experience"), candidate_idx, direction="src")
+    _clear_edges_for_node(data, ("experience", "rev_has_gain", "candidate"), candidate_idx, direction="dst")
+    _clear_edges_for_node(data, ("candidate", "is_worth", "salary"), candidate_idx, direction="src")
+    _clear_edges_for_node(data, ("salary", "rev_is_worth", "candidate"), candidate_idx, direction="dst")
+    _clear_edges_for_node(data, ("candidate", "has_time", "time"), candidate_idx, direction="src")
+    _clear_edges_for_node(data, ("time", "rev_has_time", "candidate"), candidate_idx, direction="dst")
+
+    for skill in candidate.skills:
+        skill_idx = mappings.skill_to_idx.get(skill)
+        if skill_idx is not None:
+            insertion_summary.matched_skill_indices.append(skill_idx)
+            _add_bidirectional_edge(
+                data,
+                ("candidate", "has", "skill"),
+                ("skill", "rev_has", "candidate"),
+                candidate_idx,
+                skill_idx,
+            )
+
+    if candidate.contract is not None:
+        contract_idx = mappings.contract_to_idx.get(candidate.contract)
+        if contract_idx is not None:
+            insertion_summary.contract_idx = contract_idx
+            _add_bidirectional_edge(
+                data,
+                ("candidate", "work_on", "contract"),
+                ("contract", "rev_work_on", "candidate"),
+                candidate_idx,
+                contract_idx,
+            )
+
+    if candidate.origin is not None:
+        origin_idx = mappings.origin_to_idx.get(candidate.origin)
+        if origin_idx is not None:
+            insertion_summary.origin_idx = origin_idx
+            _add_bidirectional_edge(
+                data,
+                ("candidate", "was_found_on", "origin"),
+                ("origin", "rev_was_found_on", "candidate"),
+                candidate_idx,
+                origin_idx,
+            )
+
+    if candidate.experience is not None:
+        experience_idx = mappings.experience_to_idx.get(candidate.experience)
+        if experience_idx is not None:
+            insertion_summary.experience_idx = experience_idx
+            _add_bidirectional_edge(
+                data,
+                ("candidate", "has_gain", "experience"),
+                ("experience", "rev_has_gain", "candidate"),
+                candidate_idx,
+                experience_idx,
+            )
+
+    if candidate.salary_category is not None:
+        salary_idx = mappings.salary_to_idx.get(candidate.salary_category)
+        if salary_idx is not None:
+            insertion_summary.salary_idx = salary_idx
+            _add_bidirectional_edge(
+                data,
+                ("candidate", "is_worth", "salary"),
+                ("salary", "rev_is_worth", "candidate"),
+                candidate_idx,
+                salary_idx,
+            )
+
+    if time_idx is not None:
+        _add_bidirectional_edge(
+            data,
+            ("candidate", "has_time", "time"),
+            ("time", "rev_has_time", "candidate"),
+            candidate_idx,
+            time_idx,
+        )
+
+    return data, candidate_idx, insertion_summary
+
+
 def add_job_to_graph(
     data: HeteroData,
     job: NormalizedJobInput,
@@ -560,6 +727,153 @@ def add_job_to_graph(
 
     mappings.job_id_to_idx[job.job_id] = job_idx
     mappings.job_idx_to_id[job_idx] = job.job_id
+
+    for skill in job.skills:
+        skill_idx = mappings.skill_to_idx.get(skill)
+        if skill_idx is not None:
+            insertion_summary.matched_skill_indices.append(skill_idx)
+            _add_bidirectional_edge(
+                data,
+                ("job", "has", "skill"),
+                ("skill", "rev_has", "job"),
+                job_idx,
+                skill_idx,
+            )
+
+    if job.contract is not None:
+        contract_idx = mappings.contract_to_idx.get(job.contract)
+        if contract_idx is not None:
+            insertion_summary.contract_idx = contract_idx
+            _add_bidirectional_edge(
+                data,
+                ("job", "has_type", "contract"),
+                ("contract", "rev_has_type", "job"),
+                job_idx,
+                contract_idx,
+            )
+
+    if job.experience is not None:
+        experience_idx = mappings.experience_to_idx.get(job.experience)
+        if experience_idx is not None:
+            insertion_summary.experience_idx = experience_idx
+            _add_bidirectional_edge(
+                data,
+                ("job", "requires", "experience"),
+                ("experience", "rev_requires", "job"),
+                job_idx,
+                experience_idx,
+            )
+
+    if job.salary_category is not None:
+        salary_idx = mappings.salary_to_idx.get(job.salary_category)
+        if salary_idx is not None:
+            insertion_summary.salary_idx = salary_idx
+            _add_bidirectional_edge(
+                data,
+                ("job", "is_worth", "salary"),
+                ("salary", "rev_is_worth", "job"),
+                job_idx,
+                salary_idx,
+            )
+
+    if job.category is not None:
+        category_idx = mappings.category_to_idx.get(job.category)
+        if category_idx is not None:
+            insertion_summary.category_idx = category_idx
+            _add_bidirectional_edge(
+                data,
+                ("job", "is_in", "category"),
+                ("category", "rev_is_in", "job"),
+                job_idx,
+                category_idx,
+            )
+
+    if job.company is not None:
+        company_idx = mappings.company_to_idx.get(job.company)
+        if company_idx is not None:
+            insertion_summary.company_idx = company_idx
+            _add_bidirectional_edge(
+                data,
+                ("job", "is_for", "company"),
+                ("company", "rev_is_for", "job"),
+                job_idx,
+                company_idx,
+            )
+
+    if time_idx is not None:
+        _add_bidirectional_edge(
+            data,
+            ("job", "has_time", "time"),
+            ("time", "rev_has_time", "job"),
+            job_idx,
+            time_idx,
+        )
+
+    return data, job_idx, insertion_summary
+
+
+def update_job_in_graph(
+    data: HeteroData,
+    job: NormalizedJobInput,
+    *,
+    mappings: GraphMappings | None = None,
+    text_encoder: Any | None = None,
+    copy_data: bool = False,
+) -> tuple[HeteroData, int, GraphInsertionSummary]:
+    """Update an existing job node's features and attribute edges."""
+    if data is None:
+        raise ValueError("`data` must be a valid HeteroData instance.")
+    if mappings is None:
+        mappings = GraphMappings()
+
+    if job.job_id not in mappings.job_id_to_idx:
+        raise ValueError(f"Job ID `{job.job_id}` does not exist in the persistent graph.")
+
+    if copy_data:
+        data = deepcopy(data)
+
+    job_idx = int(mappings.job_id_to_idx[job.job_id])
+
+    data, time_idx, time_created = ensure_time_node(
+        data,
+        job.timestamp,
+        mappings=mappings,
+        copy_data=False,
+    )
+
+    insertion_summary = GraphInsertionSummary(
+        candidate_idx=-1,
+        job_idx=job_idx,
+        candidate_time_idx=time_idx,
+        time_node_created=time_created,
+    )
+
+    feature_dim = int(data["job"].x.size(1))
+    job_features = _encode_text(
+        job.description,
+        text_encoder=text_encoder,
+        feature_dim=feature_dim,
+        dtype=data["job"].x.dtype,
+    )
+    data["job"].x[job_idx] = job_features.to(data["job"].x.device)
+
+    if "timestamp" in data["job"]:
+        data["job"].timestamp[job_idx] = int(job.timestamp)
+
+    _clear_edges_for_node(data, ("job", "has", "skill"), job_idx, direction="src")
+    _clear_edges_for_node(data, ("skill", "rev_has", "job"), job_idx, direction="dst")
+    _clear_edges_for_node(data, ("job", "has_type", "contract"), job_idx, direction="src")
+    _clear_edges_for_node(data, ("contract", "rev_has_type", "job"), job_idx, direction="dst")
+    _clear_edges_for_node(data, ("job", "requires", "experience"), job_idx, direction="src")
+    _clear_edges_for_node(data, ("experience", "rev_requires", "job"), job_idx, direction="dst")
+    _clear_edges_for_node(data, ("job", "is_worth", "salary"), job_idx, direction="src")
+    _clear_edges_for_node(data, ("salary", "rev_is_worth", "job"), job_idx, direction="dst")
+    _clear_edges_for_node(data, ("job", "is_in", "category"), job_idx, direction="src")
+    _clear_edges_for_node(data, ("category", "rev_is_in", "job"), job_idx, direction="dst")
+    _clear_edges_for_node(data, ("job", "is_for", "company"), job_idx, direction="src")
+    _clear_edges_for_node(data, ("company", "rev_is_for", "job"), job_idx, direction="dst")
+    _clear_edges_for_node(data, ("job", "has_time", "time"), job_idx, direction="src")
+    _clear_edges_for_node(data, ("time", "rev_has_time", "job"), job_idx, direction="dst")
 
     for skill in job.skills:
         skill_idx = mappings.skill_to_idx.get(skill)
@@ -847,18 +1161,18 @@ def extend_model_for_new_nodes(model: torch.nn.Module, data: HeteroData) -> torc
         resized.weight.data[:current_size] = embedding.weight.data
         return resized
 
-    model.user_emb = resize_embedding(model.user_emb, int(data["candidate"].node_id.numel()))
-    model.job_emb = resize_embedding(model.job_emb, int(data["job"].node_id.numel()))
+    model.user_emb = resize_embedding(cast(nn.Embedding, model.user_emb), int(data["candidate"].node_id.numel()))
+    model.job_emb = resize_embedding(cast(nn.Embedding, model.job_emb), int(data["job"].node_id.numel()))
 
     if hasattr(model, "candidature_emb") and "candidature" in data.node_types:
         model.candidature_emb = resize_embedding(
-            model.candidature_emb,
+            cast(nn.Embedding, model.candidature_emb),
             int(data["candidature"].node_id.numel()),
         )
 
     if hasattr(model, "time_node_emb") and "time" in data.node_types:
         model.time_node_emb = resize_embedding(
-            model.time_node_emb,
+            cast(nn.Embedding, model.time_node_emb),
             int(data["time"].node_id.numel()),
         )
 

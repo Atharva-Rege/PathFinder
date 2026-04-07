@@ -1,0 +1,27 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# JavaScript / frontend
+node_modules/
+dist/
+frontend/dist/
+
+# Django / local runtime artifacts
+backend/venv/
+backend/db.sqlite3
+backend/demo_credentials.csv
+
+# Project-generated artifacts
+output/
+save/
+required_data/
+
+# OS
+.DS_Store

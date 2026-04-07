@@ -777,9 +777,9 @@ def build_graph(path=DEFAULT_DATA_DIR,
         data["candidature", "has_application", "job"].edge_index = edge_index_candidature_to_job
         print('edge_index_candidature_to_job : ', edge_index_candidature_to_job)
         print('edge_index_user_to_candidature : ',edge_index_user_to_candidature)
-        print(edge_index_user_to_candidature.size())
+        print(edge_index_user_to_candidature[0].size())
         print("edge_index_user_to_skill",edge_index_user_to_skill)
-        print(edge_index_user_to_skill.size())
+        print(edge_index_user_to_skill[0].size())
         data["candidate", "applied_with", "candidature"].edge_index = edge_index_user_to_candidature
         if ts_attr:
             data["candidature", "has_time", "time"].edge_index = edge_index_candidature_to_time

@@ -1,0 +1,13 @@
+{
+  "include": [
+    "api/**/*.py",
+    "backend/**/*.py",
+    "manage.py"
+  ],
+  "exclude": [
+    "venv",
+    "**/__pycache__"
+  ],
+  "venvPath": ".",
+  "venv": "venv"
+}

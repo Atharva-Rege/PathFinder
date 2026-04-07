@@ -322,18 +322,16 @@ def train(model,
             writer.add_scalar('Metrics/F1', f1, epoch)
 
         if train_metric == 0:
-            metric_early_stop = val_loss
-
+            metric_early_stop = float(val_loss)
         elif train_metric == 1:
-            metric_early_stop = f1
+            metric_early_stop = float(f1)
         elif train_metric == 2:
-            metric_early_stop = auc
+            metric_early_stop = float(auc)
         else:
-            # Should produce an error
-            metric_early_stop = None
+            raise ValueError(f"Unsupported train_metric value: {train_metric}")
 
         if train_metric == 0:
-            if val_loss < best_metric_early_stop:
+            if metric_early_stop < float(best_metric_early_stop):
                 best_metric_early_stop = metric_early_stop
                 counter = 0
                 if save_model_bool:
@@ -343,7 +341,7 @@ def train(model,
             else:
                 counter += 1
         else:
-            if metric_early_stop > best_metric_early_stop:
+            if metric_early_stop > float(best_metric_early_stop):
                 best_metric_early_stop = metric_early_stop
                 counter = 0
                 if save_model_bool:
