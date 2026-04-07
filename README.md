@@ -168,7 +168,7 @@ Ranking → Interaction Logging → Threshold Check → Retraining → Model Rel
 ## Frontend Output
 
 <p align="center">
-  <img src="./images/fe.jpg" width="700"/>
+  <img src="./images/fe.jpeg" width="700"/>
 </p>
 
 ## Sample Output
