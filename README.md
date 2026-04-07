@@ -174,5 +174,6 @@ Ranking → Interaction Logging → Threshold Check → Retraining → Model Rel
 ## Sample Output
 
 <p align="center">
-  <img src="./images/sample_op.jpg" width="700"/>
+  <img src="./images/sample_op.jpeg" width="700"/>
 </p>
+
