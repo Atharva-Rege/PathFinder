@@ -55,7 +55,7 @@ PathFinder/
 
 * **main.py**: Entry point for running the system
 
-* **main_notebook.ipynb**: Notebook for experimentation and analysis
+* **main_notebook.ipynb**: Notebook analysis
 
 * **model.py**: Defines the GNN architecture (GraphSAGE + GAT)
 
@@ -75,13 +75,10 @@ PathFinder/
 
 * **requirements.txt**: Lists all project dependencies
 
-* **pyrightconfig.json**: Configuration for static type checking
-
 * **backend/**: Backend implementation (Django services)
 
 * **frontend/**: Frontend application (React interface)
 
-* **Learning-Phase/**: Experimental scripts and development phase code
 
 
 ---
@@ -96,7 +93,7 @@ PathFinder/
 * Relationships are modeled as edges (18 types, bidirectional)
 * Shortlist nodes explicitly represent candidate–job interactions with timestamps
 * Temporal nodes enforce recency constraints
-* Implemented using PyTorch Geometric’s `HeteroData`
+* Implemented using PyTorch Geometric’s HeteroData
 
 ---
 
@@ -125,7 +122,7 @@ PathFinder/
 Ranking → Interaction Logging → Threshold Check → Retraining → Model Reload
 ```
 
-* User interactions are stored in `interactions.json`
+* User interactions are stored in interactions.json
 * Each interaction becomes a new graph edge
 * Retraining is triggered after a predefined threshold
 * The global graph is continuously updated and persisted
