@@ -174,3 +174,12 @@ Ranking → Interaction Logging → Threshold Check → Retraining → Model Rel
   <img src="./images/sample_op.jpeg" width="700"/>
 </p>
 
+# Mentees
+- Devansh Sharma
+- Priyadarshini S
+- Ruchir Sreepada
+- Vivek Kashyap
+# Mentors
+- Atharva Atul Rege
+- H S Jayanth
+- Prahas
